@@ -1,0 +1,283 @@
+---
+title: "market segmentation"
+author: "Jason Signolet"
+date: "Thursday, 28 May 2015"
+output: html_document
+license: Copyright 2015, Jason Signolet. Licensed under the Creative Commons Attribution 4.0 license, http://creativecommons.org/licenses/by/4.0/
+
+---
+
+
+I've managed to get a decent-looking 4-cluster segmentation based on the opportunity scores from the Org questions. I've uploaded a file with the cluster assignments for the 4-cluster and a slightly different 3-cluster segmentation. I've provided a preliminary analysis, but the more detailed analysis is beyond my remit.
+
+
+
+## Initialise the data
+
+
+- I used the following libraries, and I changed all empty cells to NA
+
+
+```{r, warning = F, message = F, cache = F}
+
+library(ggplot2)
+library(reshape)
+library(Hmisc)
+
+allData <- read.csv("sample-survey-data.csv", stringsAsFactors = F, row.names = 1)
+allData[allData == ""] <- NA
+```
+
+
+- There were initially 183 responses. However, many of them did not fill in all of the fields. 
+- I used the following code to remove all respondents who left empty fields:
+
+
+```{r}
+
+sum(!is.na(rowSums(allData[,6:26], na.rm = F)))
+
+cleanData <- allData[!is.na(rowSums(allData[,6:26], na.rm = F)), ]
+```
+
+
+- I split the data into four tables, one for each question type:
+
+
+```{r, echo = F}
+details <- cleanData[ , 1:5]
+impPer <- cleanData[ , 6:12]
+impOrg <- cleanData[ , 13:19]
+satis <- cleanData[ , 20:26]
+
+```
+```{r, eval = F}
+
+details # Stuff like team size, number of clients, etc.
+impPer  # important personally
+impOrg  # important to the organisation
+satis   # satisfaction
+
+```
+
+
+## Calculate opportunity scores
+
+
+- I used these tables as matrices to calculate the opportunity score (OS) for the pers and org answers. 
+- This is basically a vectorised implementation of the equation, Opp = Imp + max(Imp - Sat, 0)
+
+
+```{r}
+oppPer <- impPer + ((impPer - satis) > 0) * (impPer - satis)
+colnames(oppPer) <- paste("Q", seq(1,7), "_OP", sep = "")
+
+oppOrg <- impOrg + ((impOrg - satis) > 0) * (impOrg - satis)
+colnames(oppOrg) <- paste("Q", seq(1,7), "_OO", sep = "")
+```
+
+
+
+# Let's deal with the "personal" answers first
+## Dimensionality reduction using PCA
+
+
+- I used the prcomp() function to perform a principal components analysis (pretty similar to the factor analysis). I added the first two components to the details table.
+
+- From the biplot we can see that Q1-3 have similar loadings, and Q4-7 have similar loadings which are roughly orthogonal to Q1-3.
+
+
+```{r, results = "hide"}
+modelPer <- prcomp(oppPer)
+
+details$pc1Per <- predict(modelPer)[, 1]
+details$pc2Per <- predict(modelPer)[, 2]
+```
+
+```{r, echo = F}
+plot(modelPer)
+biplot(modelPer) ## 
+```
+
+
+## Clustering
+
+
+- I have used k-means clustering here as it is an easily accessible non-hierarchical clustering method.
+
+- Firstly, you should determine number of clusters you will use. I've used the "bend in the elbow" method of plotting the within groups sum of squares (wss) against a number of clusters from 1 to 15. 
+- K-means clustering uses a random seed, so I repeated this calculation 100 times and took the average for each number of clusters (plot below).
+
+
+```{r, results='hide'}
+wss <- (nrow(details)-1)*sum(apply(details[, c("pc1Per", "pc2Per")],2,var))
+wssAve <- as.data.frame(matrix(wss, 100, length(wss)))
+for (i in 1:100){
+  for (j in 2:15) wssAve[i, j] <- sum(kmeans(details[, c("pc1Per", "pc2Per")], centers=j)$withinss)
+}
+```
+
+
+- The bend in the WSS plot suggests 3 or 4 clusters is optimal. I will use 3 clusters.
+
+
+```{r, echo = F}
+plot(colMeans(wssAve), type = "b", xlab = "Number of clusters", ylab = "Within groups sum of squares")
+```
+
+
+
+### K-Means Cluster Analysis
+
+
+```{r, results='hide'}
+set.seed(1)
+
+fit <- kmeans(details[, c("pc1Per", "pc2Per")], 3)
+
+# get cluster means 
+aggregate(details[, c("pc1Per", "pc2Per")],by=list(fit$cluster),FUN=mean)
+
+# append cluster assignment
+details$clusterPer <- fit$cluster
+```
+
+
+- The clusters are not too uneven. Cluster 3 is larger than the others, but not massively so.
+
+
+```{r, echo = F}
+ggplot(details, aes(pc1Per, pc2Per, colour = factor(clusterPer), shape = factor(clusterPer), size = 2)) +
+  geom_point() + theme_bw()
+```
+
+
+# Now let's do the same with the Org answers
+
+- Q1,2,3,5 have similar loadings, Q4,6,7 load roughly orthogonally to these.
+
+```{r, results='hide'}
+modelOrg <- prcomp(oppOrg)
+biplot(modelOrg)  ## As before, Q1-3 have similar loadings. Q4-7 have similar loadings.
+
+details$pc1Org <- predict(modelOrg)[, 1]
+details$pc2Org <- predict(modelOrg)[, 2]
+
+## Determine number of clusters
+wss <- (nrow(details)-1)*sum(apply(details[, c("pc1Org", "pc2Org")],2,var))
+wssAve <- as.data.frame(matrix(wss, 100, length(wss)))
+for (i in 1:100){
+  for (j in 2:15) wssAve[i, j] <- sum(kmeans(details[, c("pc1Org", "pc2Org")], centers=j)$withinss)
+}
+```
+
+
+- The bend is around 4 this time.
+
+
+```{r, echo=FALSE}
+plot(colMeans(wssAve), type = "b", xlab = "Number of clusters", ylab = "Within groups sum of squares")
+```
+```{r, results='hide'}
+## K-Means Cluster Analysis
+set.seed(2)
+fit <- kmeans(details[, c("pc1Org", "pc2Org")], 4)
+
+
+# get cluster means 
+foo = aggregate(details[, c("pc1Org", "pc2Org")],by=list(fit$cluster),FUN=mean)
+foo[order(foo[,2]),]
+
+# append cluster assignment
+details$clusterOrg <- fit$cluster
+```
+
+
+- The 4-cluster Org segmentation appears to give a fairly even split too, with 1 and 3 being larger
+
+
+```{r, echo = F}
+
+ggplot(details, aes(pc1Org, pc2Org, colour = factor(clusterOrg), shape = factor(clusterOrg), size = 2)) +
+  geom_point() + theme_bw()
+```
+
+
+
+- There is a continuum of answers with no clear, simple segmentation pattern.
+
+
+##Let's see some detail
+
+
+- First factorise the other answers so they come out in the right order
+
+
+```{r, results='hide'}
+details$Org.Size <- factor(details$Org.Size, 
+                           levels = levels(factor(details$Org.Size))[c(6, 3, 2, 5, 1, 4)])
+
+details$Team.Size <- factor(details$Team.Size, 
+                           levels = levels(factor(details$Team.Size))[c(1, 3, 4, 2)])
+
+details$Clients <- factor(details$Clients, 
+                           levels = levels(factor(details$Clients)))
+
+details$Team.Manager <- factor(details$Team.Manager)
+
+details$Consultant <- factor(details$Consultant)
+```
+
+
+- Using the 4-cluster Org system, what can we see?
+
+
+```{r, results='hide'}
+breakdown <- melt(details, 
+                  id.vars = "clusterOrg", 
+                  measure.vars = c("Org.Size", "Team.Size", "Clients", "Team.Manager","Consultant"))
+```
+
+- Cluster 1 respondents have the largest number of clients and are most likely to be managers and/or consultants.
+- Cluster 3 respondents are like Cluster 1 respondents but are less likely to be managers or consultants and have fewer clients.
+- Cluster 2 and 4 respondents work in small teams and small organisations, but cluster 4 includes solo ventures.
+
+```{r, echo = F}
+
+ggplot(breakdown, aes(value)) + geom_histogram() + 
+  facet_grid(clusterOrg ~ variable, scales = "free_x") + theme_bw()
+```
+
+
+- Given that Q1,2,3,5 load orthogonally to Q4,6,7, let's sum them.
+- In the following plots, I have colour coded the Org-based plot using the summed OS data.
+
+
+```{r, echo=FALSE}
+details$oppOrg1235 <- rowSums(oppOrg[, c(1:3,5)])
+details$oppOrg467 <- rowSums(oppOrg[, c(4,6,7)])
+
+
+
+## This let's us see that the opportunity score for Q1:3 is really low for cluster 3
+ggplot(details, aes(pc1Org, pc2Org, colour = oppOrg1235, shape = factor(clusterOrg), size = 2)) +
+  geom_point() + theme_bw()
+
+
+## This let's us see that the opportunity score for Q4:7 is highest in cluster 1
+ggplot(details, aes(pc1Org, pc2Org, colour = oppOrg467, shape = factor(clusterOrg), size = 2)) +
+  geom_point() + theme_bw()
+
+```
+
+
+- Graph 1 let's us see that the opportunity score for Q1235 is really low for clusters 3 and 4, but decent for cluster 1 and high for cluster 2
+- Graph 2 let's us see that the opportunity score for Q467 is highest in cluster 1
+
+##Here are the cluster assignments:
+```{r, echo = F}
+details[,c("clusterPer", "clusterOrg")]
+
+
+```
+
